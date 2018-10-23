@@ -9,76 +9,136 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
 
-def compl_func(x, a):
-    '''
-    Function that mimics photometric incompleteness.
-    '''
-    return 1 / (1 + np.exp(x - a))
+def main(ver='2.014', cmags=2.5, max_mag_lim=22.):
+    """
+    Merge cluster and field output files from MASSCLEAN to feed OCAAT.
+    Calculates errors and applies Gaussian noise to data.
+
+    # ver: MASSCLEAN version
+    # max_mag_lim: cut-off minimum magnitude value.
+    # cmags: Magnitude value below the minimum magnitude where the completeness
+    # removal should start.
+
+    """
+
+    # Binary fractions to generate.
+    binar_fracs = (0.1, .5)
+    # Output directory
+    dir_out = '/synth_clusters/'
+
+    # Get names and paths of synthetic clusters.
+    dir_files, sc_path, out_path = get_clust_names(ver, dir_out)
+
+    # Iterate for all binarity values.
+    clust_data = []
+    for b_fr in binar_fracs:
+        # Iterate through all synthetic clusters inside sub-dirs.
+        for f_indx, sub_dir in enumerate(dir_files[0]):
+
+            # Store name of file in 'myfile'.
+            cl_file = dir_files[1][f_indx]
+
+            clust_name = cl_file[:-5]
+
+            # Separate mass, distance, visual absorption, metallicity and age
+            # values.
+            mass, dist, vis_abs = map(float, sub_dir.split('_'))
+            metal = float('0.' + clust_name[5:8])
+            age = float(clust_name[9:]) / 100.
+            clust_data.append([
+                cl_file, clust_name, sub_dir, b_fr, mass, dist, vis_abs, metal,
+                age])
+
+    # Iterate through all synthetic clusters generated.
+    for clust in clust_data:
+
+        cl_file, clust_name, sub_dir, b_fr, mass, dist, vis_abs, metal, age =\
+            clust
+        print(sub_dir, clust_name)
+
+        # Raw and filtered data for the cluster.
+        id_clust, x_cl, y_cl, V_cl, col_cl, mass_vals = prepareData(
+            sc_path, sub_dir, cl_file, max_mag_lim)
+        # Separate raw data.
+        x_raw, y_raw, V_raw, BV_raw = x_cl[0], y_cl[0], V_cl[0], col_cl[0]
+        x_clust, y_clust, V_clust, col_clust, mass_clust = x_cl[1],\
+            y_cl[1], V_cl[1], col_cl[1:], mass_vals[2]
+        # Error-scattered photom data for the cluster.
+        V_clust, col_clust, e_V_c = error_scatter(V_clust, col_clust)
+
+        # Add binary data.
+        V_clust, col_clust, mass_clust = addBinar(
+            V_clust, col_clust, mass_clust, b_fr)
+
+        # Raw and filtered data for the field.
+        id_field, x_field, y_field, V_field, col_field, mass_f =\
+            prepareData(sc_path, sub_dir, 'field.plot', max_mag_lim)
+        # Error-scattered photom data for the cluster.
+        V_field, col_field, e_mag_f = error_scatter(V_field, col_field)
+
+        # Merge cluster and field.
+        id_cl_fl_f = np.concatenate([id_clust, id_field])
+        x_cl_fl_f = np.concatenate([x_clust, x_field])
+        y_cl_fl_f = np.concatenate([y_clust, y_field])
+        V_cl_fl_f = np.concatenate([V_clust, V_field])
+        e_V_cl_fl_f = np.concatenate([e_V_c, e_mag_f])
+        UB_cl_fl_f = np.concatenate([col_clust[0], col_field[0]])
+        BV_cl_fl_f = np.concatenate([col_clust[1], col_field[1]])
+        VI_cl_fl_f = np.concatenate([col_clust[2], col_field[2]])
+        JH_cl_fl_f = np.concatenate([col_clust[3], col_field[3]])
+        HK_cl_fl_f = np.concatenate([col_clust[4], col_field[4]])
+        mass_cl_fl_f = np.concatenate([mass_clust, mass_f])
+
+        # Store lists into single list of merged data.
+        region_full = [id_cl_fl_f, x_cl_fl_f, y_cl_fl_f, V_cl_fl_f,
+                       e_V_cl_fl_f, UB_cl_fl_f, BV_cl_fl_f, VI_cl_fl_f,
+                       JH_cl_fl_f, HK_cl_fl_f, mass_cl_fl_f]
+
+        # Call completeness removal function.
+        region_compl, histos = compl_removal(region_full, cmags)
+
+        # Write data to file.
+        out_path_sub = join(out_path, sub_dir)
+        write_out_file(out_path_sub, clust_name, region_compl)
+
+        # Unpack lists of data after completeness removal.
+        id_cl_fl, x_cl_fl, y_cl_fl, V_cl_fl, e_V_cl_fl = region_compl[:5]
+        BV_cl_fl, mass_cl_fl = region_compl[6], region_compl[-1]
+
+        # Separate cluster from field stars AFTER completeness function.
+        x_data_c, y_data_c, V_data_c, e_V_data_c, BV_data_c,\
+            e_BV_data_c, x_field_c, y_field_c, V_field_c, e_V_field_c,\
+            BV_field_c, e_BV_field_c =\
+            [], [], [], [], [], [], [], [], [], [], [], []
+        for idx, id_star in enumerate(id_cl_fl):
+            # Cluster star.
+            if str(id_star)[0] == '1':
+                x_data_c.append(x_cl_fl[idx])
+                y_data_c.append(y_cl_fl[idx])
+                V_data_c.append(V_cl_fl[idx])
+                e_V_data_c.append(e_V_cl_fl[idx])
+                BV_data_c.append(BV_cl_fl[idx])
+                e_BV_data_c.append(e_V_cl_fl[idx])
+            # Field star.
+            elif str(id_star)[0] == '2':
+                x_field_c.append(x_cl_fl[idx])
+                y_field_c.append(y_cl_fl[idx])
+                V_field_c.append(V_cl_fl[idx])
+                e_V_field_c.append(e_V_cl_fl[idx])
+                BV_field_c.append(BV_cl_fl[idx])
+                e_BV_field_c.append(e_V_cl_fl[idx])
+
+        make_plots(
+            max_mag_lim, metal, age, x_raw, y_raw, V_raw, BV_raw, V_clust,
+            BV_cl_fl, dist, vis_abs, mass, mass_vals, id_cl_fl_f,
+            V_cl_fl_f, e_V_cl_fl_f, V_cl_fl, e_V_cl_fl, region_full, histos,
+            mass_cl_fl, BV_field_c, V_field_c, BV_data_c, V_data_c, x_field_c,
+            y_field_c, x_data_c, y_data_c, out_path_sub, clust_name)
+
+        import pdb; pdb.set_trace()  # breakpoint 4460f640 //
 
 
-def compl_removal(region, c_mags):
-    '''
-    Remove random stars beyond a given magnitude limit according to a
-    completeness decreasing function.
-    '''
-
-    mag_data = region[3]
-    max_mag = max(mag_data)
-    # Number of bins.
-    bins1 = int((max(mag_data) - min(mag_data)) / 0.2)
-
-    # Histogram of magnitude values.
-    mag_hist, bin_edg = np.histogram(mag_data, bins1)
-    # Index of maximum magnitude bin, c_mags mags below the max mag value.
-    max_indx = min(range(len(bin_edg)),
-                   key=lambda i: abs(bin_edg[i] - (max_mag - c_mags)))
-    n1, p1 = mag_hist[max_indx], 100.
-    # Get completeness percentages.
-    a = rd.uniform(2., 4.)
-    comp_perc = [compl_func(i, a) * 100.
-                 for i in range(len(mag_hist[max_indx:]))]
-    # Number of stars that should be removed from each bin.
-    di = np.around((abs(mag_hist[max_indx:] - (n1 / p1) *
-                    np.asarray(comp_perc))), 0)
-
-    # Store indexes of *all* elements in mag_data whose magnitude
-    # value falls between the ranges given.
-    c_indx = np.searchsorted(bin_edg[max_indx:], mag_data, side='left')
-    N = len(bin_edg[max_indx:])
-    mask = (c_indx > 0) & (c_indx < N)
-    elements = c_indx[mask]
-    indices = np.arange(c_indx.size)[mask]
-    sorting_idx = np.argsort(elements, kind='mergesort')
-    ind_sorted = indices[sorting_idx]
-    x = np.searchsorted(elements, range(N), side='right',
-                        sorter=sorting_idx)
-    # Indexes.
-    rang_indx = [ind_sorted[x[i]:x[i + 1]] for i in range(N - 1)]
-
-    # Pick a number (given by the list 'di') of random elements in
-    # each range. Those are the indexes of the elements that
-    # should be removed from the three sub-lists.
-    rem_indx = []
-    for indx, num in enumerate(di):
-        if rang_indx[indx].any() and len(rang_indx[indx]) >= num:
-            rem_indx.append(np.random.choice(rang_indx[indx],
-                            int(num), replace=False))
-        else:
-            rem_indx.append(rang_indx[indx])
-
-    # Remove items from list.
-    # itertools.chain() flattens the list of indexes and sorted()
-    # with reverse=True inverts them so we don't change the
-    # indexes of the elements in the lists after removing them.
-    d_i = sorted(list(itertools.chain(*rem_indx)), reverse=True)
-    # Remove those selected indexes from the three sub-lists.
-    clust_compl = np.delete(np.asarray(region), d_i, axis=1)
-
-    bins2 = int((max(clust_compl[3]) - min(clust_compl[3])) / 0.2)
-
-    histos = [bins1, bins2, a]
-
-    return clust_compl, histos
+    print('End.')
 
 
 def get_clust_names(ver, dir_out):
@@ -106,25 +166,11 @@ def get_clust_names(ver, dir_out):
     return dir_files, sc_path, out_path
 
 
-def exp_func(x, e_min=0.015, e_max=0.3):
-    '''
-    Define exponential function to assign errors.
-    '''
-    m_min, m_max = min(x), max(x)
-    b = (1. / (m_max - m_min)) * np.log(e_max / e_min)
-    a = e_max / (np.exp(b * m_max))
-    sigma = a * np.exp(b * x)
-    # Clip errors.
-    sigma[sigma > e_max] = e_max
-    return sigma
-
-
-def error_scatter(sc_path, sub_dir, myfile, max_mag_lim):
-    '''
+def prepareData(sc_path, sub_dir, myfile, max_mag_lim):
+    """
     Reject stars in either the cluster or a field according to the magnitude
-    limit set, add errors to the photometric data and scatter in mag and color
-    given that errors.
-    '''
+    limit set.
+    """
 
     # Open cluster/field data file.
     data = np.loadtxt(join(sc_path, sub_dir, myfile), unpack=True)
@@ -163,18 +209,6 @@ def error_scatter(sc_path, sub_dir, myfile, max_mag_lim):
     else:
         mi_data = [0.] * len(V_data)
 
-    # Generate errors. We use a single function for all.
-    e_V = exp_func(V_data)
-
-    # Randomly move mag and color through a Gaussian function given
-    # their error values.
-    V_data = V_data + np.random.normal(0, 1, size=len(e_V)) * e_V
-    UB_data = UB_data + np.random.normal(0, 1, size=len(e_V)) * e_V
-    BV_data = BV_data + np.random.normal(0, 1, size=len(e_V)) * e_V
-    VI_data = VI_data + np.random.normal(0, 1, size=len(e_V)) * e_V
-    JH_data = JH_data + np.random.normal(0, 1, size=len(e_V)) * e_V
-    HK_data = HK_data + np.random.normal(0, 1, size=len(e_V)) * e_V
-
     if myfile != 'field.plot':
         x_vals, y_vals, mag_vals, col_vals, mass_vals = [x_raw, x_data], \
             [y_raw, y_data], [V_raw, V_data],\
@@ -184,7 +218,231 @@ def error_scatter(sc_path, sub_dir, myfile, max_mag_lim):
         x_vals, y_vals, mag_vals, col_vals, mass_vals = x_data, y_data, \
             V_data, [UB_data, BV_data, VI_data, JH_data, HK_data], mi_data
 
-    return ids, x_vals, y_vals, mag_vals, col_vals, e_V, mass_vals
+    return ids, x_vals, y_vals, mag_vals, col_vals, mass_vals
+
+
+def compl_func(x, a):
+    '''
+    Function that mimics photometric incompleteness.
+    '''
+    return 1 / (1 + np.exp(x - a))
+
+
+def compl_removal(region, c_mags):
+    '''
+    Remove random stars beyond a given magnitude limit according to a
+    completeness decreasing function.
+    '''
+
+    mag_data = region[3]
+    max_mag = max(mag_data)
+    # Number of bins.
+    bins1 = int((max(mag_data) - min(mag_data)) / 0.2)
+
+    # Histogram of magnitude values.
+    mag_hist, bin_edg = np.histogram(mag_data, bins1)
+    # Index of maximum magnitude bin, c_mags mags below the max mag value.
+    max_indx = min(range(len(bin_edg)),
+                   key=lambda i: abs(bin_edg[i] - (max_mag - c_mags)))
+    n1, p1 = mag_hist[max_indx], 100.
+    # Get completeness percentages.
+    a = rd.uniform(2., 4.)
+    comp_perc = [compl_func(i, a) * 100.
+                 for i in range(len(mag_hist[max_indx:]))]
+    # Number of stars that should be removed from each bin.
+    di = np.around((
+        abs(mag_hist[max_indx:] - (n1 / p1) * np.asarray(comp_perc))), 0)
+
+    # Store indexes of *all* elements in mag_data whose magnitude
+    # value falls between the ranges given.
+    c_indx = np.searchsorted(bin_edg[max_indx:], mag_data, side='left')
+    N = len(bin_edg[max_indx:])
+    mask = (c_indx > 0) & (c_indx < N)
+    elements = c_indx[mask]
+    indices = np.arange(c_indx.size)[mask]
+    sorting_idx = np.argsort(elements, kind='mergesort')
+    ind_sorted = indices[sorting_idx]
+    x = np.searchsorted(elements, range(N), side='right',
+                        sorter=sorting_idx)
+    # Indexes.
+    rang_indx = [ind_sorted[x[i]:x[i + 1]] for i in range(N - 1)]
+
+    # Pick a number (given by the list 'di') of random elements in
+    # each range. Those are the indexes of the elements that
+    # should be removed from the three sub-lists.
+    rem_indx = []
+    for indx, num in enumerate(di):
+        if rang_indx[indx].any() and len(rang_indx[indx]) >= num:
+            rem_indx.append(np.random.choice(
+                rang_indx[indx], int(num), replace=False))
+        else:
+            rem_indx.append(rang_indx[indx])
+
+    # Remove items from list.
+    # itertools.chain() flattens the list of indexes and sorted()
+    # with reverse=True inverts them so we don't change the
+    # indexes of the elements in the lists after removing them.
+    d_i = sorted(list(itertools.chain(*rem_indx)), reverse=True)
+    # Remove those selected indexes from the three sub-lists.
+    clust_compl = np.delete(np.asarray(region), d_i, axis=1)
+
+    bins2 = int((max(clust_compl[3]) - min(clust_compl[3])) / 0.2)
+
+    histos = [bins1, bins2, a]
+
+    return clust_compl, histos
+
+
+def exp_func(x, e_min=0.015, e_max=0.3, sigma_std=.15):
+    '''
+    Define exponential function to assign errors.
+    '''
+    m_min, m_max = min(x), max(x)
+    b = (1. / (m_max - m_min)) * np.log(e_max / e_min)
+    a = e_max / (np.exp(b * m_max))
+    sigma = a * np.exp(b * x)
+    sigma = sigma + np.random.normal(0, sigma_std * sigma, size=len(x))
+    # Clip errors.
+    sigma[sigma > e_max] = e_max
+    return sigma
+
+
+def error_scatter(V_data, col_data):
+    '''
+    Add errors to the photometric data and scatter in mag and color
+    given that errors.
+    '''
+
+    UB_data, BV_data, VI_data, JH_data, HK_data = col_data
+
+    # Generate errors. We use a single function for all.
+    e_V = exp_func(V_data)
+
+    # Randomly move mag and color through a Gaussian function given
+    # their error values.
+    std = 1.
+    V_data = V_data + np.random.normal(0, std, size=len(e_V)) * e_V
+    UB_data = UB_data + np.random.normal(0, std, size=len(e_V)) * e_V
+    BV_data = BV_data + np.random.normal(0, std, size=len(e_V)) * e_V
+    VI_data = VI_data + np.random.normal(0, std, size=len(e_V)) * e_V
+    JH_data = JH_data + np.random.normal(0, std, size=len(e_V)) * e_V
+    HK_data = HK_data + np.random.normal(0, std, size=len(e_V)) * e_V
+
+    return V_data, [UB_data, BV_data, VI_data, JH_data, HK_data], e_V
+
+
+def addBinar(mag, col_clust, mass_ini, b_fr, bin_mass_ratio=.7):
+    """
+    """
+    if b_fr > 0.:
+        # Select a fraction of stars to be binaries.
+        N = len(mag)
+        bin_indxs = rd.sample(range(0, N), int(N * b_fr))
+
+        # Calculate random secondary masses of these binary stars
+        # between bin_mass_ratio*m1 and m1, where m1 is the primary
+        # mass.
+        m2 = np.random.uniform(
+            bin_mass_ratio * mass_ini[bin_indxs], mass_ini[bin_indxs])
+        # If any secondary mass falls outside of the lower isochrone's
+        # mass range, change its value to the min value.
+        m2 = np.maximum(np.min(mass_ini[bin_indxs]), m2)
+
+        # Obtain indexes for mass values in the 'm2' array pointing to
+        # the closest mass in the theoretical isochrone.
+        bin_m_close = find_closest(mass_ini[bin_indxs], m2)
+        import pdb; pdb.set_trace()  # breakpoint 9b5407c0 //
+        
+
+        # Calculate unresolved binary magnitude for V filter.
+        mag_bin = mag_combine(mag, mag[bin_m_close])
+
+        # Calculate unresolved color for each color defined.
+        filt_colors = mags_cols_theor[mx][ax]
+
+        # Filters composing the colors, i.e.: C = (f1 - f2).
+        f1, f2 = [], []
+        # The [::2] slice indicates even positions, starting from 0.
+        for m in filt_colors[::2]:
+            f1.append(mag_combine(m, m[bin_m_close]))
+        # The [1::2] slice indicates odd positions.
+        for m in filt_colors[1::2]:
+            f2.append(mag_combine(m, m[bin_m_close]))
+
+        # Create the colors affected by binarity.
+        temp = []
+        for f_1, f_2 in zip(*[f1, f2]):
+            temp.append(f_1 - f_2)
+        col_bin.append(temp)
+
+        # import matplotlib.pyplot as plt
+        # print(mx, ax)
+        # print(min(isoch[0]), max(isoch[0]))
+        # plt.scatter(filt_colors[0] - filt_colors[1], isoch[0], c='g')
+        # plt.scatter(col_bin[0], mag_bin[0], c='r')
+        # plt.gca().invert_yaxis()
+        # plt.show()
+
+        # Add masses to obtain the binary system's mass.
+        mass_bin.append([mass_ini + mass_ini[bin_m_close]])
+
+    import pdb; pdb.set_trace()  # breakpoint f8b8d50a //
+
+
+    return mag_bin, col_bin, mass_bin
+
+
+def find_closest(key, target):
+    '''
+    See: http://stackoverflow.com/a/8929827/1391441
+    Helper function for locating the mass values in the IMF distribution onto
+    the isochrone.
+    General: find closest target element for elements in key.
+
+    Returns an array of indexes of the same length as 'target'.
+    '''
+
+    # Find indexes where the masses in 'target' should be located in 'key' such
+    # that if the masses in 'target' were inserted *before* these indices, the
+    # order of 'key' would be preserved. I.e.: pair masses in 'target' with the
+    # closest masses in 'key'.
+    # key must be sorted in ascending order.
+    idx = key.searchsorted(target)
+
+    # Convert indexes in the limits (both left and right) smaller than 1 and
+    # larger than 'len(key) - 1' to 1 and 'len(key) - 1', respectively.
+    idx = np.clip(idx, 1, len(key) - 1)
+
+    # left < target <= right for each element in 'target'.
+    left = key[idx - 1]
+    right = key[idx]
+
+    # target - left < right - target is True (or 1) when target is closer to
+    # left and False (or 0) when target is closer to right.
+    # The indexes stored in 'idx' point, for every element (IMF mass) in
+    # 'target' to the closest element (isochrone mass) in 'key'. Thus:
+    # target[XX] <closest> key[idx[XX]]
+    idx -= target - left < right - target
+
+    return idx
+
+
+def mag_combine(m1, m2):
+    """
+    Combine two magnitudes. This is a faster re-ordering of the standard
+    formula:
+
+    -2.5 * np.log10(10 ** (-0.4 * m1) + 10 ** (-0.4 * m2))
+
+    """
+    c = 10 ** -.4
+    # This catches an overflow warning issued because some Marigo isochrones
+    # contain huge values in the U filter. Not sure if this happens with
+    # other systems/filters. See issue #375
+    np.warnings.filterwarnings('ignore')
+    mbin = -2.5 * (-.4 * m1 + np.log10(1. + c ** (m2 - m1)))
+
+    return mbin
 
 
 def write_out_file(out_path_sub, clust_name, region_compl):
@@ -216,7 +474,7 @@ def write_out_file(out_path_sub, clust_name, region_compl):
 
 
 def make_plots(
-        max_mag_lim, metal, age, x_raw, y_raw, V_raw, BV_raw, V_clust,
+    max_mag_lim, metal, age, x_raw, y_raw, V_raw, BV_raw, V_clust,
         BV_cl_fl, dist, vis_abs, mass, mass_vals, id_cl_fl_f, V_cl_fl_f,
         e_V_cl_fl_f, V_cl_fl, e_V_cl_fl, region_full, histos, mass_cl_fl,
         BV_field_c, V_field_c, BV_data_c, V_data_c, x_field_c, y_field_c,
@@ -342,7 +600,7 @@ def make_plots(
     # Set minor ticks
     ax2.minorticks_on()
     # Backg color.
-    ax2.set_axis_bgcolor('#D8D8D8')
+    ax2.set_facecolor('#D8D8D8')
     # Set grid
     ax2.grid(b=True, which='major', color='w', linestyle='-', lw=1, zorder=1)
     # Plot stars.
@@ -419,112 +677,5 @@ def make_plots(
     plt.close()
 
 
-def main(ver, cmags, max_mag_lim, dir_out):
-    """
-    Merge cluster and field output files from MASSCLEAN to feed OCAAT.
-    Calculates errors and applies Gaussian noise to data.
-    """
-    # Get names and paths of synthetic clusters.
-    dir_files, sc_path, out_path = get_clust_names(ver, dir_out)
-
-    # Iterate through all synthetic clusters inside sub-dirs.
-    for f_indx, sub_dir in enumerate(dir_files[0]):
-
-        # Store name of file in 'myfile'.
-        cl_file = dir_files[1][f_indx]
-
-        clust_name = cl_file[:-5]
-        print(sub_dir, clust_name)
-
-        # Separate mass, distance, visual absorption, metallicity and age
-        # values.
-        mass, dist, vis_abs = map(float, sub_dir.split('_'))
-        metal = float('0.' + clust_name[5:8])
-        age = float(clust_name[9:]) / 100.
-
-        # Get raw data and error-scattered photometric data for the cluster.
-        id_clust, x_cl, y_cl, V_cl, col_cl, e_V_c, mass_vals = \
-            error_scatter(sc_path, sub_dir, cl_file, max_mag_lim)
-        x_raw, y_raw, V_raw, BV_raw = x_cl[0], y_cl[0], V_cl[0],\
-            col_cl[0]
-        x_clust, y_clust, V_clust, col_clust, mass_clust = x_cl[1], y_cl[1],\
-            V_cl[1], col_cl[1:], mass_vals[2]
-
-        # Get raw data and error-scattered photometric data for the field.
-        id_field, x_field, y_field, V_field, col_field, e_mag_f, mass_f =\
-            error_scatter(sc_path, sub_dir, 'field.plot', max_mag_lim)
-
-        # Merge cluster and field.
-        id_cl_fl_f = np.concatenate([id_clust, id_field])
-        x_cl_fl_f = np.concatenate([x_clust, x_field])
-        y_cl_fl_f = np.concatenate([y_clust, y_field])
-        V_cl_fl_f = np.concatenate([V_clust, V_field])
-        e_V_cl_fl_f = np.concatenate([e_V_c, e_mag_f])
-        UB_cl_fl_f = np.concatenate([col_clust[0], col_field[0]])
-        BV_cl_fl_f = np.concatenate([col_clust[1], col_field[1]])
-        VI_cl_fl_f = np.concatenate([col_clust[2], col_field[2]])
-        JH_cl_fl_f = np.concatenate([col_clust[3], col_field[3]])
-        HK_cl_fl_f = np.concatenate([col_clust[4], col_field[4]])
-        mass_cl_fl_f = np.concatenate([mass_clust, mass_f])
-
-        # Store lists into single list of merged data.
-        region_full = [id_cl_fl_f, x_cl_fl_f, y_cl_fl_f, V_cl_fl_f,
-                       e_V_cl_fl_f, UB_cl_fl_f, BV_cl_fl_f, VI_cl_fl_f,
-                       JH_cl_fl_f, HK_cl_fl_f, mass_cl_fl_f]
-
-        # Call completeness removal function.
-        region_compl, histos = compl_removal(region_full, cmags)
-
-        # Write data to file.
-        out_path_sub = join(out_path, sub_dir)
-        write_out_file(out_path_sub, clust_name, region_compl)
-
-        # Unpack lists of data after completeness removal.
-        id_cl_fl, x_cl_fl, y_cl_fl, V_cl_fl, e_V_cl_fl = region_compl[:5]
-        BV_cl_fl, mass_cl_fl = region_compl[6], region_compl[-1]
-
-        # Separate cluster from field stars AFTER completeness function.
-        x_data_c, y_data_c, V_data_c, e_V_data_c, BV_data_c,\
-            e_BV_data_c, x_field_c, y_field_c, V_field_c, e_V_field_c,\
-            BV_field_c, e_BV_field_c =\
-            [], [], [], [], [], [], [], [], [], [], [], []
-        for idx, id_star in enumerate(id_cl_fl):
-            # Cluster star.
-            if str(id_star)[0] == '1':
-                x_data_c.append(x_cl_fl[idx])
-                y_data_c.append(y_cl_fl[idx])
-                V_data_c.append(V_cl_fl[idx])
-                e_V_data_c.append(e_V_cl_fl[idx])
-                BV_data_c.append(BV_cl_fl[idx])
-                e_BV_data_c.append(e_V_cl_fl[idx])
-            # Field star.
-            elif str(id_star)[0] == '2':
-                x_field_c.append(x_cl_fl[idx])
-                y_field_c.append(y_cl_fl[idx])
-                V_field_c.append(V_cl_fl[idx])
-                e_V_field_c.append(e_V_cl_fl[idx])
-                BV_field_c.append(BV_cl_fl[idx])
-                e_BV_field_c.append(e_V_cl_fl[idx])
-
-        make_plots(
-            max_mag_lim, metal, age, x_raw, y_raw, V_raw, BV_raw, V_clust,
-            BV_cl_fl, dist, vis_abs, mass, mass_vals, id_cl_fl_f, V_cl_fl_f,
-            e_V_cl_fl_f, V_cl_fl, e_V_cl_fl, region_full, histos, mass_cl_fl,
-            BV_field_c, V_field_c, BV_data_c, V_data_c, x_field_c, y_field_c,
-            x_data_c, y_data_c, out_path_sub, clust_name)
-
-    print('End.')
-
-
 if __name__ == "__main__":
-    # MASSCLEAN version
-    ver = '2.014'
-    # Define cut-off minimum magnitude value.
-    max_mag_lim = 25.
-    # Magnitude value below the minimum magnitude where the completeness
-    # removal should start.
-    cmags = 2.5
-    # Output directory
-    dir_out = '/synth_clusters/'
-
-    main(ver, cmags, max_mag_lim, dir_out)
+    main()

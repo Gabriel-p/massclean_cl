@@ -1,7 +1,7 @@
 #!/bin/bash
 
 
-##  MASSCLEAN V2.0123 ##
+##  MASSCLEAN ##
 
 # This script generates the synthetic clusters for the specified initial mass,
 # distance, age and metallicity ranges and stores the files in the
@@ -65,11 +65,11 @@ sed -i "36s/.*/0.244    (3)/" $KING_INI
 # DIST=('500' '1000' '3000' '5000')
 # AV=('0.1' '0.5' '1.0' '3.0')
 
-METAL=('015')
-AGES=('0800')
-INIT_MASS=('1000')
-DIST=('5000')
-AV=('0.5')
+METAL=('002' '019' '030')
+AGES=('0700' '0800' '0900')
+INIT_MASS=('500' '1000' '5000')
+DIST=('1000' '5000')
+AV=('0.5' '3.0')
 
 # Get number of elements in the initial metallicity array.
 METAL_n=${#METAL[@]}
