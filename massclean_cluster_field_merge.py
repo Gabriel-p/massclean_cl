@@ -22,7 +22,7 @@ def main(ver='2.014', cmags=2.5, max_mag_lim=22.):
     """
 
     # Binary fractions to generate.
-    binar_fracs = (0.1, .5)
+    binar_fracs = (0., .5)
     # Output directory
     dir_out = '/synth_clusters/'
 
@@ -45,6 +45,8 @@ def main(ver='2.014', cmags=2.5, max_mag_lim=22.):
             mass, dist, vis_abs = map(float, sub_dir.split('_'))
             metal = float('0.' + clust_name[5:8])
             age = float(clust_name[9:]) / 100.
+            # Add binar fraction
+            clust_name = cl_file[:-5] + '_' + str(b_fr)
             clust_data.append([
                 cl_file, clust_name, sub_dir, b_fr, mass, dist, vis_abs, metal,
                 age])
@@ -56,19 +58,21 @@ def main(ver='2.014', cmags=2.5, max_mag_lim=22.):
             clust
         print(sub_dir, clust_name)
 
-        # Raw and filtered data for the cluster.
+        # Raw and filtered (max mag cut) data for the cluster.
         id_clust, x_cl, y_cl, V_cl, col_cl, mass_vals = prepareData(
             sc_path, sub_dir, cl_file, max_mag_lim)
-        # Separate raw data.
+        # Separate raw data:
         x_raw, y_raw, V_raw, BV_raw = x_cl[0], y_cl[0], V_cl[0], col_cl[0]
+        # from filtered data:
         x_clust, y_clust, V_clust, col_clust, mass_clust = x_cl[1],\
             y_cl[1], V_cl[1], col_cl[1:], mass_vals[2]
-        # Error-scattered photom data for the cluster.
-        V_clust, col_clust, e_V_c = error_scatter(V_clust, col_clust)
 
         # Add binary data.
-        V_clust, col_clust, mass_clust = addBinar(
-            V_clust, col_clust, mass_clust, b_fr)
+        id_clust, V_clust, col_clust, mass_clust = addBinar(
+            id_clust, V_clust, col_clust, mass_clust, b_fr)
+
+        # Error-scattered photom data for the cluster.
+        V_clust, col_clust, e_V_c = error_scatter(V_clust, col_clust)
 
         # Raw and filtered data for the field.
         id_field, x_field, y_field, V_field, col_field, mass_f =\
@@ -106,13 +110,14 @@ def main(ver='2.014', cmags=2.5, max_mag_lim=22.):
         BV_cl_fl, mass_cl_fl = region_compl[6], region_compl[-1]
 
         # Separate cluster from field stars AFTER completeness function.
-        x_data_c, y_data_c, V_data_c, e_V_data_c, BV_data_c,\
+        id_data_c, x_data_c, y_data_c, V_data_c, e_V_data_c, BV_data_c,\
             e_BV_data_c, x_field_c, y_field_c, V_field_c, e_V_field_c,\
             BV_field_c, e_BV_field_c =\
-            [], [], [], [], [], [], [], [], [], [], [], []
+            [], [], [], [], [], [], [], [], [], [], [], [], []
         for idx, id_star in enumerate(id_cl_fl):
             # Cluster star.
             if str(id_star)[0] == '1':
+                id_data_c.append(str(id_star))
                 x_data_c.append(x_cl_fl[idx])
                 y_data_c.append(y_cl_fl[idx])
                 V_data_c.append(V_cl_fl[idx])
@@ -133,10 +138,7 @@ def main(ver='2.014', cmags=2.5, max_mag_lim=22.):
             BV_cl_fl, dist, vis_abs, mass, mass_vals, id_cl_fl_f,
             V_cl_fl_f, e_V_cl_fl_f, V_cl_fl, e_V_cl_fl, region_full, histos,
             mass_cl_fl, BV_field_c, V_field_c, BV_data_c, V_data_c, x_field_c,
-            y_field_c, x_data_c, y_data_c, out_path_sub, clust_name)
-
-        import pdb; pdb.set_trace()  # breakpoint 4460f640 //
-
+            y_field_c, id_data_c, x_data_c, y_data_c, out_path_sub, clust_name)
 
     print('End.')
 
@@ -221,6 +223,144 @@ def prepareData(sc_path, sub_dir, myfile, max_mag_lim):
     return ids, x_vals, y_vals, mag_vals, col_vals, mass_vals
 
 
+def addBinar(ids, V_mag, col_clust, mass_ini, b_fr, bin_mass_ratio=.7):
+    """
+    """
+    UB_data, BV_data, VI_data, JH_data, HK_data = col_clust
+    if b_fr > 0.:
+        # Select a fraction of stars to be binaries.
+        N = len(V_mag)
+        bin_indxs = rd.sample(range(0, N), int(N * b_fr))
+
+        # Calculate random secondary masses of these binary stars
+        # between bin_mass_ratio*m1 and m1, where m1 is the primary
+        # mass.
+        m2 = np.random.uniform(
+            bin_mass_ratio * mass_ini[bin_indxs], mass_ini[bin_indxs])
+        # If any secondary mass falls outside of the lower isochrone's
+        # mass range, change its value to the min value.
+        m2 = np.maximum(np.min(mass_ini[bin_indxs]), m2)
+
+        # Obtain indexes for mass values in the 'm2' array pointing to
+        # the closest mass in the theoretical isochrone.
+        bin_m_close = find_closest(mass_ini, m2)
+
+        # Calculate unresolved color for each color defined.
+        U_mag = UB_data + BV_data + V_mag
+        B_mag = U_mag - UB_data
+        I_mag = V_mag - VI_data
+
+        # Calculate unresolved binary magnitude for V filter.
+        V_mag[bin_indxs] = mag_combine(V_mag[bin_indxs], V_mag[bin_m_close])
+
+        # Calculate unresolved binary magnitude for these filters.
+        U_mag[bin_indxs] = mag_combine(U_mag[bin_indxs], U_mag[bin_m_close])
+        B_mag[bin_indxs] = mag_combine(B_mag[bin_indxs], B_mag[bin_m_close])
+        I_mag[bin_indxs] = mag_combine(I_mag[bin_indxs], I_mag[bin_m_close])
+        UB_data, BV_data, VI_data = U_mag - B_mag, B_mag - V_mag, V_mag - I_mag
+
+        # Add masses to obtain the binary system's mass.
+        mass_ini[bin_indxs] = mass_ini[bin_m_close]
+
+        for i in bin_indxs:
+            ids[i] = int(str(ids[i])[0] + '0' + str(ids[i])[1:])
+
+        print("WARNING: JH and HK colors are NOT affected by binarity.")
+
+    return ids, V_mag, [UB_data, BV_data, VI_data, JH_data, HK_data], mass_ini
+
+
+def find_closest(key, target):
+    '''
+    See: http://stackoverflow.com/a/8929827/1391441
+    Helper function for locating the mass values in the IMF distribution onto
+    the isochrone.
+    General: find closest target element for elements in key.
+
+    Returns an array of indexes of the same length as 'target'.
+    '''
+
+    # Find indexes where the masses in 'target' should be located in 'key' such
+    # that if the masses in 'target' were inserted *before* these indices, the
+    # order of 'key' would be preserved. I.e.: pair masses in 'target' with the
+    # closest masses in 'key'.
+    # key must be sorted in ascending order.
+    idx = key.searchsorted(target)
+
+    # Convert indexes in the limits (both left and right) smaller than 1 and
+    # larger than 'len(key) - 1' to 1 and 'len(key) - 1', respectively.
+    idx = np.clip(idx, 1, len(key) - 1)
+
+    # left < target <= right for each element in 'target'.
+    left = key[idx - 1]
+    right = key[idx]
+
+    # target - left < right - target is True (or 1) when target is closer to
+    # left and False (or 0) when target is closer to right.
+    # The indexes stored in 'idx' point, for every element (IMF mass) in
+    # 'target' to the closest element (isochrone mass) in 'key'. Thus:
+    # target[XX] <closest> key[idx[XX]]
+    idx -= target - left < right - target
+
+    return idx
+
+
+def mag_combine(m1, m2):
+    """
+    Combine two magnitudes. This is a faster re-ordering of the standard
+    formula:
+
+    -2.5 * np.log10(10 ** (-0.4 * m1) + 10 ** (-0.4 * m2))
+
+    """
+    c = 10 ** -.4
+    # This catches an overflow warning issued because some Marigo isochrones
+    # contain huge values in the U filter. Not sure if this happens with
+    # other systems/filters. See issue #375
+    np.warnings.filterwarnings('ignore')
+    mbin = -2.5 * (-.4 * m1 + np.log10(1. + c ** (m2 - m1)))
+
+    return mbin
+
+
+def exp_func(x, e_min=0.015, e_max=0.3, sigma_std=.15):
+    '''
+    Define exponential function to assign errors.
+    '''
+    m_min, m_max = min(x), max(x)
+    b = (1. / (m_max - m_min)) * np.log(e_max / e_min)
+    a = e_max / (np.exp(b * m_max))
+    sigma = a * np.exp(b * x)
+    sigma = sigma + np.random.normal(0, sigma_std * sigma, size=len(x))
+    # Clip errors.
+    sigma[sigma > e_max] = e_max
+    return sigma
+
+
+def error_scatter(V_data, col_data):
+    '''
+    Add errors to the photometric data and scatter in mag and color
+    given that errors.
+    '''
+
+    UB_data, BV_data, VI_data, JH_data, HK_data = col_data
+
+    # Generate errors. We use a single function for all.
+    e_V = exp_func(V_data)
+
+    # Randomly move mag and color through a Gaussian function given
+    # their error values.
+    std = 1.
+    V_data = V_data + np.random.normal(0, std, size=len(e_V)) * e_V
+    UB_data = UB_data + np.random.normal(0, std, size=len(e_V)) * e_V
+    BV_data = BV_data + np.random.normal(0, std, size=len(e_V)) * e_V
+    VI_data = VI_data + np.random.normal(0, std, size=len(e_V)) * e_V
+    JH_data = JH_data + np.random.normal(0, std, size=len(e_V)) * e_V
+    HK_data = HK_data + np.random.normal(0, std, size=len(e_V)) * e_V
+
+    return V_data, [UB_data, BV_data, VI_data, JH_data, HK_data], e_V
+
+
 def compl_func(x, a):
     '''
     Function that mimics photometric incompleteness.
@@ -293,158 +433,6 @@ def compl_removal(region, c_mags):
     return clust_compl, histos
 
 
-def exp_func(x, e_min=0.015, e_max=0.3, sigma_std=.15):
-    '''
-    Define exponential function to assign errors.
-    '''
-    m_min, m_max = min(x), max(x)
-    b = (1. / (m_max - m_min)) * np.log(e_max / e_min)
-    a = e_max / (np.exp(b * m_max))
-    sigma = a * np.exp(b * x)
-    sigma = sigma + np.random.normal(0, sigma_std * sigma, size=len(x))
-    # Clip errors.
-    sigma[sigma > e_max] = e_max
-    return sigma
-
-
-def error_scatter(V_data, col_data):
-    '''
-    Add errors to the photometric data and scatter in mag and color
-    given that errors.
-    '''
-
-    UB_data, BV_data, VI_data, JH_data, HK_data = col_data
-
-    # Generate errors. We use a single function for all.
-    e_V = exp_func(V_data)
-
-    # Randomly move mag and color through a Gaussian function given
-    # their error values.
-    std = 1.
-    V_data = V_data + np.random.normal(0, std, size=len(e_V)) * e_V
-    UB_data = UB_data + np.random.normal(0, std, size=len(e_V)) * e_V
-    BV_data = BV_data + np.random.normal(0, std, size=len(e_V)) * e_V
-    VI_data = VI_data + np.random.normal(0, std, size=len(e_V)) * e_V
-    JH_data = JH_data + np.random.normal(0, std, size=len(e_V)) * e_V
-    HK_data = HK_data + np.random.normal(0, std, size=len(e_V)) * e_V
-
-    return V_data, [UB_data, BV_data, VI_data, JH_data, HK_data], e_V
-
-
-def addBinar(mag, col_clust, mass_ini, b_fr, bin_mass_ratio=.7):
-    """
-    """
-    if b_fr > 0.:
-        # Select a fraction of stars to be binaries.
-        N = len(mag)
-        bin_indxs = rd.sample(range(0, N), int(N * b_fr))
-
-        # Calculate random secondary masses of these binary stars
-        # between bin_mass_ratio*m1 and m1, where m1 is the primary
-        # mass.
-        m2 = np.random.uniform(
-            bin_mass_ratio * mass_ini[bin_indxs], mass_ini[bin_indxs])
-        # If any secondary mass falls outside of the lower isochrone's
-        # mass range, change its value to the min value.
-        m2 = np.maximum(np.min(mass_ini[bin_indxs]), m2)
-
-        # Obtain indexes for mass values in the 'm2' array pointing to
-        # the closest mass in the theoretical isochrone.
-        bin_m_close = find_closest(mass_ini[bin_indxs], m2)
-        import pdb; pdb.set_trace()  # breakpoint 9b5407c0 //
-        
-
-        # Calculate unresolved binary magnitude for V filter.
-        mag_bin = mag_combine(mag, mag[bin_m_close])
-
-        # Calculate unresolved color for each color defined.
-        filt_colors = mags_cols_theor[mx][ax]
-
-        # Filters composing the colors, i.e.: C = (f1 - f2).
-        f1, f2 = [], []
-        # The [::2] slice indicates even positions, starting from 0.
-        for m in filt_colors[::2]:
-            f1.append(mag_combine(m, m[bin_m_close]))
-        # The [1::2] slice indicates odd positions.
-        for m in filt_colors[1::2]:
-            f2.append(mag_combine(m, m[bin_m_close]))
-
-        # Create the colors affected by binarity.
-        temp = []
-        for f_1, f_2 in zip(*[f1, f2]):
-            temp.append(f_1 - f_2)
-        col_bin.append(temp)
-
-        # import matplotlib.pyplot as plt
-        # print(mx, ax)
-        # print(min(isoch[0]), max(isoch[0]))
-        # plt.scatter(filt_colors[0] - filt_colors[1], isoch[0], c='g')
-        # plt.scatter(col_bin[0], mag_bin[0], c='r')
-        # plt.gca().invert_yaxis()
-        # plt.show()
-
-        # Add masses to obtain the binary system's mass.
-        mass_bin.append([mass_ini + mass_ini[bin_m_close]])
-
-    import pdb; pdb.set_trace()  # breakpoint f8b8d50a //
-
-
-    return mag_bin, col_bin, mass_bin
-
-
-def find_closest(key, target):
-    '''
-    See: http://stackoverflow.com/a/8929827/1391441
-    Helper function for locating the mass values in the IMF distribution onto
-    the isochrone.
-    General: find closest target element for elements in key.
-
-    Returns an array of indexes of the same length as 'target'.
-    '''
-
-    # Find indexes where the masses in 'target' should be located in 'key' such
-    # that if the masses in 'target' were inserted *before* these indices, the
-    # order of 'key' would be preserved. I.e.: pair masses in 'target' with the
-    # closest masses in 'key'.
-    # key must be sorted in ascending order.
-    idx = key.searchsorted(target)
-
-    # Convert indexes in the limits (both left and right) smaller than 1 and
-    # larger than 'len(key) - 1' to 1 and 'len(key) - 1', respectively.
-    idx = np.clip(idx, 1, len(key) - 1)
-
-    # left < target <= right for each element in 'target'.
-    left = key[idx - 1]
-    right = key[idx]
-
-    # target - left < right - target is True (or 1) when target is closer to
-    # left and False (or 0) when target is closer to right.
-    # The indexes stored in 'idx' point, for every element (IMF mass) in
-    # 'target' to the closest element (isochrone mass) in 'key'. Thus:
-    # target[XX] <closest> key[idx[XX]]
-    idx -= target - left < right - target
-
-    return idx
-
-
-def mag_combine(m1, m2):
-    """
-    Combine two magnitudes. This is a faster re-ordering of the standard
-    formula:
-
-    -2.5 * np.log10(10 ** (-0.4 * m1) + 10 ** (-0.4 * m2))
-
-    """
-    c = 10 ** -.4
-    # This catches an overflow warning issued because some Marigo isochrones
-    # contain huge values in the U filter. Not sure if this happens with
-    # other systems/filters. See issue #375
-    np.warnings.filterwarnings('ignore')
-    mbin = -2.5 * (-.4 * m1 + np.log10(1. + c ** (m2 - m1)))
-
-    return mbin
-
-
 def write_out_file(out_path_sub, clust_name, region_compl):
     """
     Write synthetic cluster data to file.
@@ -478,7 +466,7 @@ def make_plots(
         BV_cl_fl, dist, vis_abs, mass, mass_vals, id_cl_fl_f, V_cl_fl_f,
         e_V_cl_fl_f, V_cl_fl, e_V_cl_fl, region_full, histos, mass_cl_fl,
         BV_field_c, V_field_c, BV_data_c, V_data_c, x_field_c, y_field_c,
-        x_data_c, y_data_c, out_path_sub, clust_name):
+        id_data_c, x_data_c, y_data_c, out_path_sub, clust_name):
     """
     Plot synthetic clusters.
     """
@@ -643,8 +631,18 @@ def make_plots(
     # Plot stars.
     plt.scatter(BV_field_c, V_field_c, marker='o', c='k', s=12, lw=0.25,
                 facecolors='none', zorder=3)
-    plt.scatter(BV_data_c, V_data_c, marker='o', c='r', s=12., lw=0.5,
+    BV_binar_s, V_binar_s, BV_binar_c, V_binar_c = [], [], [], []
+    for i, st_id in enumerate(id_data_c):
+        if str(st_id)[1] == '0':
+            BV_binar_c.append(BV_data_c[i])
+            V_binar_c.append(V_data_c[i])
+        else:
+            BV_binar_s.append(BV_data_c[i])
+            V_binar_s.append(V_data_c[i])
+    plt.scatter(BV_binar_s, V_binar_s, marker='o', c='b', s=12., lw=0.5,
                 zorder=4)
+    plt.scatter(BV_binar_c, V_binar_c, marker='o', c='r', s=12., lw=0.5,
+                edgecolor='k', zorder=4)
 
     # x,y finding chart of full frame
     ax6 = plt.subplot(gs[2:4, 4:6])
