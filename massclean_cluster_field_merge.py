@@ -71,14 +71,19 @@ def main(ver='2.014', cmags=2.5, max_mag_lim=22.):
         id_clust, V_clust, col_clust, mass_clust = addBinar(
             id_clust, V_clust, col_clust, mass_clust, b_fr)
 
-        # Error-scattered photom data for the cluster.
-        V_clust, col_clust, e_V_c = error_scatter(V_clust, col_clust)
-
         # Raw and filtered data for the field.
         id_field, x_field, y_field, V_field, col_field, mass_f =\
             prepareData(sc_path, sub_dir, 'field.plot', max_mag_lim)
+
+        Vmin, Vmax = min(V_clust), max(V_clust)
+
         # Error-scattered photom data for the cluster.
-        V_field, col_field, e_mag_f = error_scatter(V_field, col_field)
+        V_clust, col_clust, e_V_c = error_scatter(
+            V_clust, col_clust, Vmin, Vmax)
+
+        # Error-scattered photom data for the cluster.
+        V_field, col_field, e_mag_f = error_scatter(
+            V_field, col_field, Vmin, Vmax)
 
         # Merge cluster and field.
         id_cl_fl_f = np.concatenate([id_clust, id_field])
@@ -323,21 +328,23 @@ def mag_combine(m1, m2):
     return mbin
 
 
-def exp_func(x, e_min=0.015, e_max=0.3, sigma_std=.15):
+def exp_func(x, m_min, m_max, e_min=0.01, e_max=0.2, sigma_std=.1):
     '''
     Define exponential function to assign errors.
     '''
-    m_min, m_max = min(x), max(x)
-    b = (1. / (m_max - m_min)) * np.log(e_max / e_min)
-    a = e_max / (np.exp(b * m_max))
-    sigma = a * np.exp(b * x)
+    b = np.log(e_max / e_min) / (m_max - m_min)
+    a = e_max / np.exp(b * m_max)
+
+    sigma = a * np.exp(b * np.asarray(x))
     sigma = sigma + np.random.normal(0, sigma_std * sigma, size=len(x))
+
     # Clip errors.
-    sigma[sigma > e_max] = e_max
+    sigma = np.clip(sigma, a_min=e_min, a_max=e_max)
+
     return sigma
 
 
-def error_scatter(V_data, col_data):
+def error_scatter(V_data, col_data, Vmin, Vmax):
     '''
     Add errors to the photometric data and scatter in mag and color
     given that errors.
@@ -346,17 +353,17 @@ def error_scatter(V_data, col_data):
     UB_data, BV_data, VI_data, JH_data, HK_data = col_data
 
     # Generate errors. We use a single function for all.
-    e_V = exp_func(V_data)
+    e_V = exp_func(V_data, Vmin, Vmax)
 
     # Randomly move mag and color through a Gaussian function given
     # their error values.
-    std = 1.
-    V_data = V_data + np.random.normal(0, std, size=len(e_V)) * e_V
-    UB_data = UB_data + np.random.normal(0, std, size=len(e_V)) * e_V
-    BV_data = BV_data + np.random.normal(0, std, size=len(e_V)) * e_V
-    VI_data = VI_data + np.random.normal(0, std, size=len(e_V)) * e_V
-    JH_data = JH_data + np.random.normal(0, std, size=len(e_V)) * e_V
-    HK_data = HK_data + np.random.normal(0, std, size=len(e_V)) * e_V
+    std = 1.5
+    V_data = V_data + np.random.normal(0., std, len(V_data)) * e_V
+    UB_data = UB_data + np.random.normal(0., std, len(V_data)) * e_V
+    BV_data = BV_data + np.random.normal(0., std, len(V_data)) * e_V
+    VI_data = VI_data + np.random.normal(0., std, len(V_data)) * e_V
+    JH_data = JH_data + np.random.normal(0., std, len(V_data)) * e_V
+    HK_data = HK_data + np.random.normal(0., std, len(V_data)) * e_V
 
     return V_data, [UB_data, BV_data, VI_data, JH_data, HK_data], e_V
 
